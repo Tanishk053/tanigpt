@@ -2,6 +2,11 @@ from flask import Flask, render_template, request, redirect, url_for
 import json
 import os
 
+@app.route('/ping')
+def ping():
+    return "I'm alive!", 200
+
+
 app = Flask(__name__)
 USER_DATA_FILE = "users.json"
 ADMIN_PASSWORD = "1029@tanishk"  # Change this!
