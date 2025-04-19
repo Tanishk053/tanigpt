@@ -1,22 +1,22 @@
 from flask import Flask, render_template, request, redirect, url_for
+from datetime import datetime
 import json
 import os
 
-@app.route('/ping')
-def ping():
-    print(f"Ping received at {datetime.now()}")
-    return "I'm alive!", 200
-
-
-app = Flask(__name__)
+app = Flask(__name__)  # Define app FIRST
 USER_DATA_FILE = "users.json"
-ADMIN_PASSWORD = "1029@tanishk"  # Change this!
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "1029@tanishk")  # Use env var with fallback
 
 def load_users():
     if os.path.exists(USER_DATA_FILE):
         with open(USER_DATA_FILE, 'r') as f:
             return json.load(f)
     return {}
+
+@app.route('/ping')  # Now works because app is defined
+def ping():
+    print(f"Ping received at {datetime.now()}")
+    return "I'm alive!", 200
 
 @app.route('/')
 def login():
@@ -44,4 +44,4 @@ def delete_user(user_id):
     return redirect(url_for('dashboard'))
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)  # Disable debug mode for production
