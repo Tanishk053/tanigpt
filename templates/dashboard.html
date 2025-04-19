@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TaniGPT Admin Dashboard</title>
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-family: 'Arial', sans-serif;
+            padding: 20px;
+        }
+        h1 { font-size: 28px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #2a2a2a;
+            border-radius: 8px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #444;
+        }
+        th { background: #3a3a3a; }
+        a { color: #bb86fc; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <h1>TaniGPT Admin Dashboard</h1>
+    <h2>Registered Users</h2>
+    <table>
+        <tr>
+            <th>User ID</th>
+            <th>Name</th>
+            <th>Phone</th>
+            <th>Action</th>
+        </tr>
+        {% for user_id, user in users.items() %}
+        <tr>
+            <td>{{ user_id }}</td>
+            <td>{{ user.get('name', 'N/A') }}</td>
+            <td>{{ user.get('phone', 'N/A') }}</td>
+            <td><a href="/delete/{{ user_id }}">Delete</a></td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
