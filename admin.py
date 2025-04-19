@@ -4,6 +4,7 @@ import os
 
 @app.route('/ping')
 def ping():
+    print(f"Ping received at {datetime.now()}")
     return "I'm alive!", 200
 
 
