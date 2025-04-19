@@ -121,7 +121,7 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['name'] = name
     await update.message.reply_text(
         f"Acha, {name}, badhiya choice! {get_emoji('welcome')} "
-        "Ab apna phone number bhejo, jo bhi ho, no tension!"
+        "Ab apna 10-digit phone number bhejo, jaise 9876543210. (+91 apne aap add ho jayega!)"
     )
     return PHONE
 
@@ -130,32 +130,43 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.text.strip()
     logger.info(f"Received phone from user {user_id}: {phone}")
 
-    if not phone:
-        await update.message.reply_text(f"Arre, number toh daal do! {get_emoji('error')} Koi bhi number chalega!")
+    # Validate phone number: must be exactly 10 digits
+    if not phone.isdigit() or len(phone) != 10:
+        await update.message.reply_text(
+            f"Arre, phone number 10 digits ka hona chahiye! {get_emoji('error')} "
+            "Sirf numbers daal do, jaise 9876543210."
+        )
         return PHONE
 
+    # Prepend +91 to the phone number
+    formatted_phone = f"+91{phone}"
+    logger.info(f"Formatted phone number for user {user_id}: {formatted_phone}")
+
+    # Check if the formatted phone number already exists
     for uid, data in user_index.items():
         user_file = os.path.join(USER_DATA_DIR, f"user_{data['user_number']}.json")
         with open(user_file, 'r') as f:
             user_data = json.load(f)
-        if user_data['phone_number'] == phone:
+        if user_data['phone_number'] == formatted_phone:
             await update.message.reply_text(
-                f"Yeh number toh pehle se hai! {get_emoji('error')} Koi naya number try karo!"
+                f"Yeh number (+91{phone}) toh pehle se hai! {get_emoji('error')} Koi naya number try karo!"
             )
             return PHONE
 
+    # Assign user number and save user data
     user_number = str(len(user_index) + 1)
     user_index[user_id] = {'user_number': user_number}
 
     user_data = {
         'name': context.user_data['name'],
-        'phone_number': phone,
+        'phone_number': formatted_phone,  # Save with +91
         'chat_history': [{"role": "system", "content": SYSTEM_PROMPT}]
     }
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
     with open(user_file, 'w') as f:
         json.dump(user_data, f, indent=4)
 
+    # Save user index
     with open(USER_INDEX_FILE, 'w') as f:
         json.dump(user_index, f, indent=4)
     logger.info(f"User {user_id} signed up with user number {user_number}: {user_data}")
