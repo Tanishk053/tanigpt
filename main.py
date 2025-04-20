@@ -86,7 +86,7 @@ def get_emoji(context_type, message_content=""):
         return emoji_map["tanishk"][0]
     return emoji_map.get(context_type, ["😊"])[0]
 
-# Telegram bot handlers (unchanged from original, included for completeness)
+# Telegram bot handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
     logger.info(f"Received /start command from user {user_id}")
@@ -109,7 +109,257 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return NAME
 
-# ... (other handlers like get_name, get_phone, etc., remain unchanged for brevity)
+async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    name = update.message.text.strip()
+    logger.info(f"Received name from user {user_id}: {name}")
+
+    if not name:
+        await update.message.reply_text(f"Arre, naam toh btao! {get_emoji('error')} Kuch cool sa naam daal do!")
+        return NAME
+
+    context.user_data['name'] = name
+    await update.message.reply_text(
+        f"Acha, {name}, badhiya choice! {get_emoji('welcome')} "
+        "Ab apna 10-digit phone number bhejo, jaise 9876543210. (+91 apne aap add ho jayega!)"
+    )
+    return PHONE
+
+async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    phone = update.message.text.strip()
+    logger.info(f"Received phone from user {user_id}: {phone}")
+
+    if not phone.isdigit() or len(phone) != 10:
+        await update.message.reply_text(
+            f"Arre, phone number 10 digits ka hona chahiye! {get_emoji('error')} "
+            "Sirf numbers daal do, jaise 9876543210."
+        )
+        return PHONE
+
+    formatted_phone = f"+91{phone}"
+    logger.info(f"Formatted phone number for user {user_id}: {formatted_phone}")
+
+    for uid, data in user_index.items():
+        user_file = os.path.join(USER_DATA_DIR, f"user_{data['user_number']}.json")
+        with open(user_file, 'r') as f:
+            user_data = json.load(f)
+        if user_data['phone_number'] == formatted_phone:
+            await update.message.reply_text(
+                f"Yeh number (+91{phone}) toh pehle se hai! {get_emoji('error')} Koi naya number try karo!"
+            )
+            return PHONE
+
+    user_number = str(len(user_index) + 1)
+    user_index[user_id] = {'user_number': user_number}
+
+    user_data = {
+        'name': context.user_data['name'],
+        'phone_number': formatted_phone,
+        'chat_history': [{"role": "system", "content": SYSTEM_PROMPT}]
+    }
+    user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
+    with open(user_file, 'w') as f:
+        json.dump(user_data, f, indent=4)
+
+    with open(USER_INDEX_FILE, 'w') as f:
+        json.dump(user_index, f, indent=4)
+    logger.info(f"User {user_id} signed up with user number {user_number}: {user_data}")
+
+    welcome_message = (
+        f"Hlo {context.user_data['name']}, signup ho gaya, swagat hai TaniGPT mein! "
+        f"Apka user number hai {user_number}. Ab bol, kya scene hai? {get_emoji('welcome')}"
+    )
+    await update.message.reply_text(welcome_message)
+    return ConversationHandler.END
+
+async def cancel_signup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"Signup cancel kar diya, bro! {get_emoji('success')} Dobara try karo with /start!"
+    )
+    return ConversationHandler.END
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    logger.info(f"Received /admin command from user {user_id}")
+
+    if user_id != ADMIN_USER_ID:
+        await update.message.reply_text(
+            f"Sorry bro, yeh admin wala scene sirf boss ke liye hai! {get_emoji('admin')}"
+        )
+        return ConversationHandler.END
+
+    await update.message.reply_text(f"Admin password daal do, boss! {get_emoji('admin')}")
+    return PASSWORD
+
+async def check_admin_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    password = update.message.text.strip()
+    logger.info(f"Received password attempt from user {user_id}")
+
+    if password != ADMIN_PASSWORD:
+        await update.message.reply_text(
+            f"Galat password, bro! {get_emoji('error')} Dobara try kar ya /cancel kar!"
+        )
+        return PASSWORD
+
+    keyboard = [
+        ["Users", "History"],
+        ["Delete User", "Exit"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text(
+        f"Welcome to TaniGPT Admin Panel, boss! {get_emoji('admin')} Kya karna hai?",
+        reply_markup=reply_markup
+    )
+    return MENU
+
+async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    choice = update.message.text.strip()
+    logger.info(f"Admin menu choice from user {user_id}: {choice}")
+
+    if choice == "Exit":
+        await update.message.reply_text(
+            f"Admin panel se exit kar diya, boss! {get_emoji('success')}",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return ConversationHandler.END
+
+    elif choice == "Users":
+        if not user_index:
+            await update.message.reply_text(f"Abhi koi users nahi hain, bro! {get_emoji('error')}")
+        else:
+            user_list = "Registered Users:\n"
+            for uid, data in user_index.items():
+                user_file = os.path.join(USER_DATA_DIR, f"user_{data['user_number']}.json")
+                with open(user_file, 'r') as f:
+                    user_data = json.load(f)
+                user_list += (
+                    f"User Number: {data['user_number']}\n"
+                    f"Telegram ID: {uid}\n"
+                    f"Name: {user_data['name']}\n"
+                    f"Phone: {user_data['phone_number']}\n\n"
+                )
+            await update.message.reply_text(user_list)
+
+    elif choice == "History":
+        await update.message.reply_text(f"Kis user ka history dekhna hai? User number daal do: {get_emoji('admin')}")
+        return VIEW_HISTORY
+
+    elif choice == "Delete User":
+        await update.message.reply_text(f"Kis user ko delete karna hai? User number daal do: {get_emoji('admin')}")
+        return DELETE_USER
+
+    keyboard = [
+        ["Users", "History"],
+        ["Delete User", "Exit"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text(f"Ab kya karna hai, boss? {get_emoji('admin')}", reply_markup=reply_markup)
+    return MENU
+
+async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    user_number = update.message.text.strip()
+    logger.info(f"Received user number {user_number} for history from user {user_id}")
+
+    user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
+    if not os.path.exists(user_file):
+        await update.message.reply_text(f"Yeh user number galat hai, bro! {get_emoji('error')}")
+        return MENU
+
+    with open(user_file, 'r') as f:
+        user_data = json.load(f)
+
+    history = user_data.get('chat_history', [])
+    if len(history) <= 1:
+        await update.message.reply_text(
+            f"User {user_number} ka koi history nahi hai, boss! {get_emoji('error')}"
+        )
+    else:
+        history_text = f"Chat History for User {user_number} ({user_data['name']}):\n\n"
+        for msg in history:
+            if msg['role'] == 'system':
+                continue
+            role = "User" if msg['role'] == 'user' else "TaniGPT"
+            history_text += f"{role}: {msg['content']}\n\n"
+        await update.message.reply_text(history_text)
+
+    keyboard = [
+        ["Users", "History"],
+        ["Delete User", "Exit"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text(f"Ab kya karna hai, boss? {get_emoji('admin')}", reply_markup=reply_markup)
+    return MENU
+
+async def delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    user_number = update.message.text.strip()
+    logger.info(f"Received user number {user_number} for deletion from user {user_id}")
+
+    user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
+    if not os.path.exists(user_file):
+        await update.message.reply_text(f"Yeh user number galat hai, bro! {get_emoji('error')}")
+        return MENU
+
+    user_id_to_delete = None
+    for uid, data in list(user_index.items()):
+        if data['user_number'] == user_number:
+            user_id_to_delete = uid
+            break
+
+    if user_id_to_delete:
+        del user_index[user_id_to_delete]
+        with open(USER_INDEX_FILE, 'w') as f:
+            json.dump(user_index, f, indent=4)
+
+    os.remove(user_file)
+    await update.message.reply_text(f"User {user_number} delete ho gaya, boss! {get_emoji('success')}")
+
+    keyboard = [
+        ["Users", "History"],
+        ["Delete User", "Exit"]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text(f"Ab kya karna hai, boss? {get_emoji('admin')}", reply_markup=reply_markup)
+    return MENU
+
+async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"Admin panel se exit kar diya, boss! {get_emoji('success')}",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ConversationHandler.END
+
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    about_text = (
+        "Welcome to *TaniGPT*, a sophisticated AI-powered chatbot crafted by *Tnix AI* for Telegram. "
+        "Engineered with advanced technology, TaniGPT delivers seamless, engaging conversations tailored to diverse user needs. "
+        "Communicating in English with a professional yet approachable tone, it leverages cutting-edge natural language processing to ensure precise, meaningful dialogue. "
+        "TaniGPT embodies Tnix AI’s commitment to innovation, serving as a reliable digital companion that enhances user interaction within Telegram’s dynamic ecosystem."
+    )
+    await update.message.reply_text(about_text, parse_mode="Markdown")
+
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    logger.info(f"Clearing history for user {user_id}")
+
+    if user_id not in user_index:
+        await update.message.reply_text(f"Pehle signup karo, bro! {get_emoji('error')} Use /start.")
+        return
+
+    user_number = user_index[user_id]['user_number']
+    user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
+    with open(user_file, 'r') as f:
+        user_data = json.load(f)
+    user_data['chat_history'] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    with open(user_file, 'w') as f:
+        json.dump(user_data, f, indent=4)
+    await update.message.reply_text(
+        f"Hlo {user_data['name']}, tera history clear ho gaya! {get_emoji('success')}"
+    )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
