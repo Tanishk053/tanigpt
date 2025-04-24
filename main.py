@@ -1,9 +1,11 @@
 import os
+import re
 import logging
 import time
 import json
 from datetime import datetime
 from dotenv import load_dotenv
+from flask import Flask, request, Response
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -27,10 +29,12 @@ load_dotenv()
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "tnixai2025")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+PORT = int(os.environ.get("PORT", 8443))
 
 if not MISTRAL_API_KEY or not TELEGRAM_BOT_TOKEN:
-    logger.error("Missing MISTRAL_API_KEY or TELEGRAM_BOT_TOKEN in .env. Please check your configuration.")
-    raise ValueError("Missing MISTRAL_API_KEY or TELEGRAM_BOT_TOKEN in .env. Set them in your .env file or environment variables.")
+    logger.error("Missing MISTRAL_API_KEY or TELEGRAM_BOT_TOKEN in .env")
+    raise ValueError("Missing MISTRAL_API_KEY or TELEGRAM_BOT_TOKEN in .env")
 
 # Admin user ID
 ADMIN_USER_ID = "5842560424"
@@ -64,27 +68,30 @@ SYSTEM_PROMPT = (
 )
 
 # Signup states
-NAME, PHONE = range(2)
+NAME, PHONE, CONFIRM = range(3)
 
 # Admin panel states
 PASSWORD, MENU, VIEW_HISTORY, DELETE_USER = range(4)
 
-# Emoji selection based on context
+# Emoji selection
 def get_emoji(context_type, message_content=""):
     emoji_map = {
-        "welcome": ["😎", "🚀", "✨"],
-        "error": ["😬", "😅", "🙈"],
-        "admin": ["👑", "😎", "🔐"],
-        "success": ["✅", "🎉", "👍"],
-        "general": ["😊", "👍", "🤗"],
-        "date": ["📅", "🕒"],
-        "tanishk": ["🎤", "🎵"]
+        "welcome": "🚀",
+        "error": "😅",
+        "admin": "🔐",
+        "success": "✅",
+        "general": "😊",
+        "date": "📅",
+        "tanishk": "🎵"
     }
     if context_type == "general" and "date" in message_content.lower():
-        return emoji_map["date"][0]
+        return emoji_map["date"]
     if context_type == "general" and "tanishk sharma" in message_content.lower():
-        return emoji_map["tanishk"][0]
-    return emoji_map.get(context_type, ["😊"])[0]
+        return emoji_map["tanishk"]
+    return emoji_map.get(context_type, "😊")
+
+# Flask app for webhook
+flask_app = Flask(__name__)
 
 # Telegram bot handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,19 +100,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id in user_index:
         user_number = user_index[user_id]['user_number']
-        user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
-        with open(user_file, 'r') as f:
-            user_data = json.load(f)
-        welcome_message = (
-            f"Hlo {user_data['name']}, welcome back to TaniGPT! "
-            f"Apka user number hai {user_number}. Chalo, kya baat karna hai? {get_emoji('welcome')}"
+        await update.message.reply_text(
+            f"Welcome back to TaniGPT! Your user number is {user_number}. Kya baat karna hai? {get_emoji('welcome')}"
         )
-        await update.message.reply_text(welcome_message)
         return ConversationHandler.END
 
     await update.message.reply_text(
-        f"Yo bro, TaniGPT mein swagat hai! {get_emoji('welcome')} "
-        "Pehle signup karo, bada maza aayega! Apna naam bhejo, cool sa!"
+        f"Yo, swagat hai TaniGPT mein! {get_emoji('welcome')} "
+        "Chalo signup karte hain. Apna naam bhejo (sirf letters allowed)!"
     )
     return NAME
 
@@ -114,14 +116,16 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
     logger.info(f"Received name from user {user_id}: {name}")
 
-    if not name:
-        await update.message.reply_text(f"Arre, naam toh btao! {get_emoji('error')} Kuch cool sa naam daal do!")
+    if not re.match(r"^[A-Za-z\s]+$", name):
+        await update.message.reply_text(
+            f"Arre, naam mein sirf letters aur spaces hone chahiye! {get_emoji('error')} Try again!"
+        )
         return NAME
 
     context.user_data['name'] = name
     await update.message.reply_text(
-        f"Acha, {name}, badhiya choice! {get_emoji('welcome')} "
-        "Ab apna 10-digit phone number bhejo, jaise 9876543210. (+91 apne aap add ho jayega!)"
+        f"Badhiya naam, {name}! {get_emoji('welcome')} "
+        "Ab apna 10-digit phone number bhejo (like 9876543210)."
     )
     return PHONE
 
@@ -130,32 +134,58 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.text.strip()
     logger.info(f"Received phone from user {user_id}: {phone}")
 
-    if not phone.isdigit() or len(phone) != 10:
+    if not re.match(r"^\d{10}$", phone):
         await update.message.reply_text(
-            f"Arre, phone number 10 digits ka hona chahiye! {get_emoji('error')} "
-            "Sirf numbers daal do, jaise 9876543210."
+            f"Phone number 10 digits ka hona chahiye, no spaces ya symbols! {get_emoji('error')} Try again."
         )
         return PHONE
 
     formatted_phone = f"+91{phone}"
-    logger.info(f"Formatted phone number for user {user_id}: {formatted_phone}")
-
     for uid, data in user_index.items():
         user_file = os.path.join(USER_DATA_DIR, f"user_{data['user_number']}.json")
         with open(user_file, 'r') as f:
             user_data = json.load(f)
         if user_data['phone_number'] == formatted_phone:
             await update.message.reply_text(
-                f"Yeh number (+91{phone}) toh pehle se hai! {get_emoji('error')} Koi naya number try karo!"
+                f"Yeh number (+91{phone}) already registered hai! {get_emoji('error')} Naya number daal."
             )
             return PHONE
+
+    context.user_data['phone'] = formatted_phone
+    keyboard = [["Confirm"], ["Edit"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    await update.message.reply_text(
+        f"Details:\nName: {context.user_data['name']}\nPhone: {formatted_phone}\n"
+        f"Theek hai? Confirm karo ya edit! {get_emoji('general')}",
+        reply_markup=reply_markup
+    )
+    return CONFIRM
+
+async def confirm_signup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    choice = update.message.text.strip().lower()
+    logger.info(f"Received signup confirmation choice from user {user_id}: {choice}")
+
+    if choice == "edit":
+        await update.message.reply_text(
+            f"Chalo, naam se shuru karte hain! Naya naam bhejo. {get_emoji('general')}",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return NAME
+
+    if choice != "confirm":
+        await update.message.reply_text(
+            f"Arre, Confirm ya Edit select karo! {get_emoji('error')}",
+            reply_markup=ReplyKeyboardMarkup([["Confirm"], ["Edit"]], one_time_keyboard=True, resize_keyboard=True)
+        )
+        return CONFIRM
 
     user_number = str(len(user_index) + 1)
     user_index[user_id] = {'user_number': user_number}
 
     user_data = {
         'name': context.user_data['name'],
-        'phone_number': formatted_phone,
+        'phone_number': context.user_data['phone'],
         'chat_history': [{"role": "system", "content": SYSTEM_PROMPT}]
     }
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
@@ -166,16 +196,15 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         json.dump(user_index, f, indent=4)
     logger.info(f"User {user_id} signed up with user number {user_number}: {user_data}")
 
-    welcome_message = (
-        f"Hlo {context.user_data['name']}, signup ho gaya, swagat hai TaniGPT mein! "
-        f"Apka user number hai {user_number}. Ab bol, kya scene hai? {get_emoji('welcome')}"
+    await update.message.reply_text(
+        f"Signup done! TaniGPT mein welcome, your user number is {user_number}. Ab kya scene hai? {get_emoji('welcome')}",
+        reply_markup=ReplyKeyboardRemove()
     )
-    await update.message.reply_text(welcome_message)
     return ConversationHandler.END
 
 async def cancel_signup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"Signup cancel kar diya, bro! {get_emoji('success')} Dobara try karo with /start!"
+        f"Signup cancel kiya! {get_emoji('success')} /start se dobara try kar."
     )
     return ConversationHandler.END
 
@@ -185,11 +214,11 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id != ADMIN_USER_ID:
         await update.message.reply_text(
-            f"Sorry bro, yeh admin wala scene sirf boss ke liye hai! {get_emoji('admin')}"
+            f"Sorry, admin access sirf boss ke liye! {get_emoji('admin')}"
         )
         return ConversationHandler.END
 
-    await update.message.reply_text(f"Admin password daal do, boss! {get_emoji('admin')}")
+    await update.message.reply_text(f"Admin password daal do! {get_emoji('admin')}")
     return PASSWORD
 
 async def check_admin_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,17 +228,14 @@ async def check_admin_password(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if password != ADMIN_PASSWORD:
         await update.message.reply_text(
-            f"Galat password, bro! {get_emoji('error')} Dobara try kar ya /cancel kar!"
+            f"Galat password! {get_emoji('error')} Try again ya /cancel kar."
         )
         return PASSWORD
 
-    keyboard = [
-        ["Users", "History"],
-        ["Delete User", "Exit"]
-    ]
+    keyboard = [["Users", "History"], ["Delete User", "Exit"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
     await update.message.reply_text(
-        f"Welcome to TaniGPT Admin Panel, boss! {get_emoji('admin')} Kya karna hai?",
+        f"TaniGPT Admin Panel mein welcome! Kya karna hai? {get_emoji('admin')}",
         reply_markup=reply_markup
     )
     return MENU
@@ -221,14 +247,14 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if choice == "Exit":
         await update.message.reply_text(
-            f"Admin panel se exit kar diya, boss! {get_emoji('success')}",
+            f"Admin panel se exit kiya! {get_emoji('success')}",
             reply_markup=ReplyKeyboardRemove()
         )
         return ConversationHandler.END
 
     elif choice == "Users":
         if not user_index:
-            await update.message.reply_text(f"Abhi koi users nahi hain, bro! {get_emoji('error')}")
+            await update.message.reply_text(f"Koi users nahi hain! {get_emoji('error')}")
         else:
             user_list = "Registered Users:\n"
             for uid, data in user_index.items():
@@ -244,19 +270,16 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(user_list)
 
     elif choice == "History":
-        await update.message.reply_text(f"Kis user ka history dekhna hai? User number daal do: {get_emoji('admin')}")
+        await update.message.reply_text(f"Kis user ka history? User number daal: {get_emoji('admin')}")
         return VIEW_HISTORY
 
     elif choice == "Delete User":
-        await update.message.reply_text(f"Kis user ko delete karna hai? User number daal do: {get_emoji('admin')}")
+        await update.message.reply_text(f"Kis user ko delete? User number daal: {get_emoji('admin')}")
         return DELETE_USER
 
-    keyboard = [
-        ["Users", "History"],
-        ["Delete User", "Exit"]
-    ]
+    keyboard = [["Users", "History"], ["Delete User", "Exit"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(f"Ab kya karna hai, boss? {get_emoji('admin')}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Ab kya karna hai? {get_emoji('admin')}", reply_markup=reply_markup)
     return MENU
 
 async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,7 +289,7 @@ async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
     if not os.path.exists(user_file):
-        await update.message.reply_text(f"Yeh user number galat hai, bro! {get_emoji('error')}")
+        await update.message.reply_text(f"Galat user number! {get_emoji('error')}")
         return MENU
 
     with open(user_file, 'r') as f:
@@ -274,9 +297,7 @@ async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     history = user_data.get('chat_history', [])
     if len(history) <= 1:
-        await update.message.reply_text(
-            f"User {user_number} ka koi history nahi hai, boss! {get_emoji('error')}"
-        )
+        await update.message.reply_text(f"User {user_number} ka koi history nahi! {get_emoji('error')}")
     else:
         history_text = f"Chat History for User {user_number} ({user_data['name']}):\n\n"
         for msg in history:
@@ -286,12 +307,9 @@ async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             history_text += f"{role}: {msg['content']}\n\n"
         await update.message.reply_text(history_text)
 
-    keyboard = [
-        ["Users", "History"],
-        ["Delete User", "Exit"]
-    ]
+    keyboard = [["Users", "History"], ["Delete User", "Exit"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(f"Ab kya karna hai, boss? {get_emoji('admin')}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Ab kya karna hai? {get_emoji('admin')}", reply_markup=reply_markup)
     return MENU
 
 async def delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,34 +319,26 @@ async def delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
     if not os.path.exists(user_file):
-        await update.message.reply_text(f"Yeh user number galat hai, bro! {get_emoji('error')}")
+        await update.message.reply_text(f"Galat user number! {get_emoji('error')}")
         return MENU
 
-    user_id_to_delete = None
-    for uid, data in list(user_index.items()):
-        if data['user_number'] == user_number:
-            user_id_to_delete = uid
-            break
-
+    user_id_to_delete = next((uid for uid, data in user_index.items() if data['user_number'] == user_number), None)
     if user_id_to_delete:
         del user_index[user_id_to_delete]
         with open(USER_INDEX_FILE, 'w') as f:
             json.dump(user_index, f, indent=4)
 
     os.remove(user_file)
-    await update.message.reply_text(f"User {user_number} delete ho gaya, boss! {get_emoji('success')}")
+    await update.message.reply_text(f"User {user_number} deleted! {get_emoji('success')}")
 
-    keyboard = [
-        ["Users", "History"],
-        ["Delete User", "Exit"]
-    ]
+    keyboard = [["Users", "History"], ["Delete User", "Exit"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(f"Ab kya karna hai, boss? {get_emoji('admin')}", reply_markup=reply_markup)
+    await update.message.reply_text(f"Ab kya karna hai? {get_emoji('admin')}", reply_markup=reply_markup)
     return MENU
 
 async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"Admin panel se exit kar diya, boss! {get_emoji('success')}",
+        f"Admin panel se exit kiya! {get_emoji('success')}",
         reply_markup=ReplyKeyboardRemove()
     )
     return ConversationHandler.END
@@ -347,7 +357,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Clearing history for user {user_id}")
 
     if user_id not in user_index:
-        await update.message.reply_text(f"Pehle signup karo, bro! {get_emoji('error')} Use /start.")
+        await update.message.reply_text(f"Pehle signup kar! {get_emoji('error')} Use /start.")
         return
 
     user_number = user_index[user_id]['user_number']
@@ -357,9 +367,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data['chat_history'] = [{"role": "system", "content": SYSTEM_PROMPT}]
     with open(user_file, 'w') as f:
         json.dump(user_data, f, indent=4)
-    await update.message.reply_text(
-        f"Hlo {user_data['name']}, tera history clear ho gaya! {get_emoji('success')}"
-    )
+    await update.message.reply_text(f"History cleared! {get_emoji('success')}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
@@ -367,7 +375,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Received text from user {user_id}: {user_message}")
 
     if user_id not in user_index:
-        await update.message.reply_text(f"Pehle signup karo, bro! {get_emoji('error')} Use /start.")
+        await update.message.reply_text(f"Pehle signup kar! {get_emoji('error')} Use /start.")
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -377,7 +385,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(user_file, 'r') as f:
         user_data = json.load(f)
 
-    user_name = user_data['name']
     user_data['chat_history'].append({"role": "user", "content": user_message})
 
     MAX_HISTORY = 10
@@ -412,15 +419,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             json.dump(user_data, f, indent=4)
 
         emoji = get_emoji("general", user_message)
-        personalized_response = f"Hlo {user_name}, {response} {emoji}"
-        await update.message.reply_text(personalized_response)
+        await update.message.reply_text(f"{response} {emoji}")
 
     except Exception as e:
         logger.error(f"Error in text processing: {str(e)}")
         emoji = get_emoji("error")
-        await update.message.reply_text(f"Hlo {user_name}, kuch galat ho gaya: {str(e)} {emoji}")
+        await update.message.reply_text(f"Kuch galat ho gaya: {str(e)} {emoji}")
+
+# Flask webhook endpoint
+@flask_app.route(f"/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    await app.process_update(update)
+    return Response(status=200)
 
 def main():
+    global app
     logger.info("Starting TaniGPT Bot...")
     try:
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -431,6 +445,7 @@ def main():
             states={
                 NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
                 PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
+                CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_signup)],
             },
             fallbacks=[CommandHandler("cancel", cancel_signup)],
         )
@@ -454,16 +469,17 @@ def main():
         app.add_handler(CommandHandler("clear", clear))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-        # Determine run mode (polling or webhook)
-        if os.environ.get("USE_WEBHOOK", "false").lower() == "true":
-            port = int(os.environ.get("PORT", 8443))
+        # Run mode: Webhook or Polling
+        if WEBHOOK_URL:
+            logger.info(f"Setting up webhook at {WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
             app.run_webhook(
                 listen="0.0.0.0",
-                port=port,
+                port=PORT,
                 url_path=TELEGRAM_BOT_TOKEN,
-                webhook_url=f"https://{os.environ.get('DOMAIN')}/{TELEGRAM_BOT_TOKEN}"
+                webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}"
             )
-            logger.info(f"Bot running in webhook mode on port {port}")
+            flask_app.run(host="0.0.0.0", port=PORT)
+            logger.info(f"Bot running in webhook mode on port {PORT}")
         else:
             logger.info("Bot running in polling mode")
             app.run_polling(allowed_updates=Update.ALL_TYPES)
