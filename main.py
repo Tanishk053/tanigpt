@@ -32,9 +32,9 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "tnixai2025")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 8443))
 
-if not MISTRAL_API_KEY or not TELEGRAM_BOT_TOKEN:
-    logger.error("Missing MISTRAL_API_KEY or TELEGRAM_BOT_TOKEN in .env")
-    raise ValueError("Missing MISTRAL_API_KEY or TELEGRAM_BOT_TOKEN in .env")
+if not MISTRAL_API_KEY or not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
+    logger.error("Missing MISTRAL_API_KEY, TELEGRAM_BOT_TOKEN, or WEBHOOK_URL in .env")
+    raise ValueError("Missing required environment variables in .env")
 
 # Admin user ID
 ADMIN_USER_ID = "5842560424"
@@ -331,7 +331,7 @@ async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             role = "User" if msg['role'] == 'user' else "TaniGPT"
             content = msg['content'].replace('\n', ' ')  # Avoid formatting issues in Telegram
             history_text += f"{role}: {content}\n\n"
-        # Telegram has a message length limit, so split if necessary
+        # Split long messages to avoid Telegram's 4096 character limit
         if len(history_text) > 4096:
             parts = [history_text[i:i + 4096] for i in range(0, len(history_text), 4096)]
             for part in parts:
@@ -522,17 +522,11 @@ def main():
         app.add_handler(CommandHandler("clear", clear))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-        # Run mode: Webhook
-        if WEBHOOK_URL:
-            logger.info(f"Setting up webhook at {WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
-            # Set webhook
-            app.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
-            # Run Flask app
-            flask_app.run(host="0.0.0.0", port=PORT, debug=False)
-            logger.info(f"Bot running in webhook mode on port {PORT}")
-        else:
-            logger.info("Bot running in polling mode")
-            app.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Set webhook and run Flask app
+        logger.info(f"Setting up webhook at {WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
+        app.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
+        flask_app.run(host="0.0.0.0", port=PORT, debug=False)
+        logger.info(f"Bot running in webhook mode on port {PORT}")
 
     except Exception as e:
         logger.error(f"Failed to start bot: {str(e)}")
