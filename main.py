@@ -143,13 +143,17 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     formatted_phone = f"+91{phone}"
     for uid, data in user_index.items():
         user_file = os.path.join(USER_DATA_DIR, f"user_{data['user_number']}.json")
-        with open(user_file, 'r') as f:
-            user_data = json.load(f)
-        if user_data['phone_number'] == formatted_phone:
-            await update.message.reply_text(
-                f"Yeh number (+91{phone}) already registered hai! {get_emoji('error')} Naya number daal."
-            )
-            return PHONE
+        try:
+            with open(user_file, 'r') as f:
+                user_data = json.load(f)
+            if user_data['phone_number'] == formatted_phone:
+                await update.message.reply_text(
+                    f"Yeh number (+91{phone}) already registered hai! {get_emoji('error')} Naya number daal."
+                )
+                return PHONE
+        except Exception as e:
+            logger.error(f"Error reading user file {user_file}: {str(e)}")
+            continue
 
     context.user_data['phone'] = formatted_phone
     keyboard = [["Confirm"], ["Edit"]]
@@ -189,12 +193,18 @@ async def confirm_signup(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'chat_history': [{"role": "system", "content": SYSTEM_PROMPT}]
     }
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
-    with open(user_file, 'w') as f:
-        json.dump(user_data, f, indent=4)
-
-    with open(USER_INDEX_FILE, 'w') as f:
-        json.dump(user_index, f, indent=4)
-    logger.info(f"User {user_id} signed up with user number {user_number}: {user_data}")
+    try:
+        with open(user_file, 'w') as f:
+            json.dump(user_data, f, indent=4)
+        with open(USER_INDEX_FILE, 'w') as f:
+            json.dump(user_index, f, indent=4)
+        logger.info(f"User {user_id} signed up with user number {user_number}: {user_data}")
+    except Exception as e:
+        logger.error(f"Error saving user data for {user_id}: {str(e)}")
+        await update.message.reply_text(
+            f"Kuch galat ho gaya signup ke time pe! {get_emoji('error')} Try again with /start."
+        )
+        return ConversationHandler.END
 
     await update.message.reply_text(
         f"Signup done! TaniGPT mein welcome, your user number is {user_number}. Ab kya scene hai? {get_emoji('welcome')}",
@@ -259,14 +269,18 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_list = "Registered Users:\n"
             for uid, data in user_index.items():
                 user_file = os.path.join(USER_DATA_DIR, f"user_{data['user_number']}.json")
-                with open(user_file, 'r') as f:
-                    user_data = json.load(f)
-                user_list += (
-                    f"User Number: {data['user_number']}\n"
-                    f"Telegram ID: {uid}\n"
-                    f"Name: {user_data['name']}\n"
-                    f"Phone: {user_data['phone_number']}\n\n"
-                )
+                try:
+                    with open(user_file, 'r') as f:
+                        user_data = json.load(f)
+                    user_list += (
+                        f"User Number: {data['user_number']}\n"
+                        f"Telegram ID: {uid}\n"
+                        f"Name: {user_data['name']}\n"
+                        f"Phone: {user_data['phone_number']}\n\n"
+                    )
+                except Exception as e:
+                    logger.error(f"Error reading user file {user_file}: {str(e)}")
+                    user_list += f"User Number: {data['user_number']} - Error loading data\n\n"
             await update.message.reply_text(user_list)
 
     elif choice == "History":
@@ -290,13 +304,24 @@ async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
     if not os.path.exists(user_file):
         await update.message.reply_text(f"Galat user number! {get_emoji('error')}")
+        keyboard = [["Users", "History"], ["Delete User", "Exit"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        await update.message.reply_text(f"Ab kya karna hai? {get_emoji('admin')}", reply_markup=reply_markup)
         return MENU
 
-    with open(user_file, 'r') as f:
-        user_data = json.load(f)
+    try:
+        with open(user_file, 'r') as f:
+            user_data = json.load(f)
+    except Exception as e:
+        logger.error(f"Error reading user file {user_file}: {str(e)}")
+        await update.message.reply_text(f"Error loading history! {get_emoji('error')}")
+        keyboard = [["Users", "History"], ["Delete User", "Exit"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        await update.message.reply_text(f"Ab kya karna hai? {get_emoji('admin')}", reply_markup=reply_markup)
+        return MENU
 
     history = user_data.get('chat_history', [])
-    if len(history) <= 1:
+    if len(history) <= 1:  # Only system prompt
         await update.message.reply_text(f"User {user_number} ka koi history nahi! {get_emoji('error')}")
     else:
         history_text = f"Chat History for User {user_number} ({user_data['name']}):\n\n"
@@ -304,8 +329,15 @@ async def view_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if msg['role'] == 'system':
                 continue
             role = "User" if msg['role'] == 'user' else "TaniGPT"
-            history_text += f"{role}: {msg['content']}\n\n"
-        await update.message.reply_text(history_text)
+            content = msg['content'].replace('\n', ' ')  # Avoid formatting issues in Telegram
+            history_text += f"{role}: {content}\n\n"
+        # Telegram has a message length limit, so split if necessary
+        if len(history_text) > 4096:
+            parts = [history_text[i:i + 4096] for i in range(0, len(history_text), 4096)]
+            for part in parts:
+                await update.message.reply_text(part)
+        else:
+            await update.message.reply_text(history_text)
 
     keyboard = [["Users", "History"], ["Delete User", "Exit"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
@@ -320,16 +352,22 @@ async def delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
     if not os.path.exists(user_file):
         await update.message.reply_text(f"Galat user number! {get_emoji('error')}")
+        keyboard = [["Users", "History"], ["Delete User", "Exit"]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        await update.message.reply_text(f"Ab kya karna hai? {get_emoji('admin')}", reply_markup=reply_markup)
         return MENU
 
-    user_id_to_delete = next((uid for uid, data in user_index.items() if data['user_number'] == user_number), None)
-    if user_id_to_delete:
-        del user_index[user_id_to_delete]
-        with open(USER_INDEX_FILE, 'w') as f:
-            json.dump(user_index, f, indent=4)
-
-    os.remove(user_file)
-    await update.message.reply_text(f"User {user_number} deleted! {get_emoji('success')}")
+    try:
+        user_id_to_delete = next((uid for uid, data in user_index.items() if data['user_number'] == user_number), None)
+        if user_id_to_delete:
+            del user_index[user_id_to_delete]
+            with open(USER_INDEX_FILE, 'w') as f:
+                json.dump(user_index, f, indent=4)
+        os.remove(user_file)
+        await update.message.reply_text(f"User {user_number} deleted! {get_emoji('success')}")
+    except Exception as e:
+        logger.error(f"Error deleting user {user_number}: {str(e)}")
+        await update.message.reply_text(f"Error deleting user! {get_emoji('error')}")
 
     keyboard = [["Users", "History"], ["Delete User", "Exit"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
@@ -362,12 +400,16 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_number = user_index[user_id]['user_number']
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
-    with open(user_file, 'r') as f:
-        user_data = json.load(f)
-    user_data['chat_history'] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    with open(user_file, 'w') as f:
-        json.dump(user_data, f, indent=4)
-    await update.message.reply_text(f"History cleared! {get_emoji('success')}")
+    try:
+        with open(user_file, 'r') as f:
+            user_data = json.load(f)
+        user_data['chat_history'] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        with open(user_file, 'w') as f:
+            json.dump(user_data, f, indent=4)
+        await update.message.reply_text(f"History cleared! {get_emoji('success')}")
+    except Exception as e:
+        logger.error(f"Error clearing history for user {user_id}: {str(e)}")
+        await update.message.reply_text(f"Error clearing history! {get_emoji('error')}")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.message.from_user.id)
@@ -382,8 +424,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_number = user_index[user_id]['user_number']
     user_file = os.path.join(USER_DATA_DIR, f"user_{user_number}.json")
-    with open(user_file, 'r') as f:
-        user_data = json.load(f)
+    try:
+        with open(user_file, 'r') as f:
+            user_data = json.load(f)
+    except Exception as e:
+        logger.error(f"Error reading user file {user_file}: {str(e)}")
+        await update.message.reply_text(f"Error loading your data! {get_emoji('error')}")
+        return
 
     user_data['chat_history'].append({"role": "user", "content": user_message})
 
@@ -419,7 +466,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             json.dump(user_data, f, indent=4)
 
         emoji = get_emoji("general", user_message)
-        await update.message.reply_text(f"{response} {emoji}")
+        # Split long messages to avoid Telegram's 4096 character limit
+        if len(response) > 4096:
+            parts = [response[i:i + 4096] for i in range(0, len(response), 4096)]
+            for part in parts:
+                await update.message.reply_text(f"{part} {emoji}")
+        else:
+            await update.message.reply_text(f"{response} {emoji}")
 
     except Exception as e:
         logger.error(f"Error in text processing: {str(e)}")
@@ -469,16 +522,13 @@ def main():
         app.add_handler(CommandHandler("clear", clear))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-        # Run mode: Webhook or Polling
+        # Run mode: Webhook
         if WEBHOOK_URL:
             logger.info(f"Setting up webhook at {WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
-            app.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                url_path=TELEGRAM_BOT_TOKEN,
-                webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}"
-            )
-            flask_app.run(host="0.0.0.0", port=PORT)
+            # Set webhook
+            app.bot.set_webhook(url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
+            # Run Flask app
+            flask_app.run(host="0.0.0.0", port=PORT, debug=False)
             logger.info(f"Bot running in webhook mode on port {PORT}")
         else:
             logger.info("Bot running in polling mode")
