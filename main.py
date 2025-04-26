@@ -32,9 +32,19 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "tnixai2025")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 8443))
 
-if not MISTRAL_API_KEY or not TELEGRAM_BOT_TOKEN or not WEBHOOK_URL:
-    logger.error("Missing MISTRAL_API_KEY, TELEGRAM_BOT_TOKEN, or WEBHOOK_URL in .env")
-    raise ValueError("Missing required environment variables in .env")
+# Check for missing environment variables
+missing_vars = []
+if not MISTRAL_API_KEY:
+    missing_vars.append("MISTRAL_API_KEY")
+if not TELEGRAM_BOT_TOKEN:
+    missing_vars.append("TELEGRAM_BOT_TOKEN")
+if not WEBHOOK_URL:
+    missing_vars.append("WEBHOOK_URL")
+
+if missing_vars:
+    error_msg = f"Missing environment variables: {', '.join(missing_vars)}"
+    logger.error(error_msg)
+    raise ValueError(error_msg)
 
 # Admin user ID
 ADMIN_USER_ID = "5842560424"
